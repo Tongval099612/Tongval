@@ -1,0 +1,321 @@
+<!-- public/admin.html -->
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin Panel</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 1100px; }
+    h1 { margin-bottom: .2em; }
+    .hidden { display: none; }
+    .btn { padding: 6px 10px; border: 1px solid #333; cursor: pointer; margin-right: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+    input, select { padding: 6px; margin: 4px 0; }
+    .row { display:flex; gap:12px; align-items:center; margin-bottom:8px; }
+    .col { flex:1; }
+    .small { width: 120px; }
+  </style>
+</head>
+<body>
+  <h1>Admin Backend (ตัวอย่าง)</h1>
+
+  <div id="loginView">
+    <h2>Login</h2>
+    <div class="row">
+      <input id="username" placeholder="username" />
+      <input id="password" type="password" placeholder="password" />
+      <button id="loginBtn" class="btn">Login</button>
+    </div>
+    <div>Default admin: <strong>admin</strong> / <strong>Admin@123</strong> (เปลี่ยนรหัสหลังล็อกอิน)</div>
+    <div id="loginMsg" style="color:red"></div>
+  </div>
+
+  <div id="appView" class="hidden">
+    <div style="display:flex; justify-content: space-between; align-items:center;">
+      <div>
+        <strong id="who"></strong>
+      </div>
+      <div>
+        <button id="logoutBtn" class="btn">Logout</button>
+      </div>
+    </div>
+
+    <hr/>
+
+    <section>
+      <h2>Settings (ค่าคอม)</h2>
+      <div class="row">
+        <label class="small">ป้อน%ค่าคอม</label>
+        <input id="commissionPercent" class="small" />
+        <button id="saveSettings" class="btn">บันทึก</button>
+        <button id="refreshSummary" class="btn">รีเฟรชสรุป</button>
+      </div>
+      <div id="summaryArea"></div>
+    </section>
+
+    <hr/>
+
+    <section>
+      <h2>Customers</h2>
+      <div style="display:flex; gap:10px; margin-bottom:8px;">
+        <input id="c_name" placeholder="name" />
+        <input id="c_email" placeholder="email" />
+        <input id="c_phone" placeholder="phone" />
+        <input id="c_note" placeholder="note" />
+        <button id="addCustomer" class="btn">Add</button>
+      </div>
+      <div id="customersArea"></div>
+    </section>
+
+    <hr/>
+
+    <section>
+      <h2>Transactions</h2>
+      <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+        <select id="tx_customer"></select>
+        <select id="tx_type">
+          <option value="deposit">Deposit</option>
+          <option value="withdraw">Withdraw</option>
+        </select>
+        <input id="tx_amount" placeholder="amount" type="number" />
+        <select id="tx_status">
+          <option value="pending">pending</option>
+          <option value="approved">approved</option>
+          <option value="rejected">rejected</option>
+        </select>
+        <button id="addTx" class="btn">Add TX</button>
+      </div>
+      <div id="txArea"></div>
+    </section>
+  </div>
+
+  <script>
+    const api = (path, opts={}) => {
+      const token = localStorage.getItem('token');
+      const headers = Object.assign({'Content-Type':'application/json'}, opts.headers || {});
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      return fetch(path, Object.assign({headers}, opts))
+        .then(async r => {
+          const t = await r.json().catch(()=>null);
+          if (!r.ok) throw t || { error: 'HTTP ' + r.status };
+          return t;
+        });
+    };
+
+    const $ = id => document.getElementById(id);
+
+    // Login
+    $('loginBtn').addEventListener('click', async ()=>{
+      try {
+        const u = $('username').value.trim();
+        const p = $('password').value;
+        const res = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: u, password: p }) });
+        localStorage.setItem('token', res.token);
+        showApp(res.admin);
+      } catch (e) {
+        $('loginMsg').innerText = e && e.error ? e.error : 'Login failed';
+      }
+    });
+
+    $('logoutBtn').addEventListener('click', ()=> {
+      localStorage.removeItem('token');
+      location.reload();
+    });
+
+    async function showApp(admin) {
+      $('loginView').classList.add('hidden');
+      $('appView').classList.remove('hidden');
+      $('who').innerText = 'Logged in as: ' + (admin.display_name || admin.username || '');
+      await loadSettings();
+      await loadCustomers();
+      await loadTransactions();
+      await loadSummary();
+    }
+
+    // If token exists try to show
+    (async ()=>{
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const me = await api('/api/admin/me');
+          showApp(me.admin);
+        } catch (e) {
+          console.log('token invalid', e);
+          localStorage.removeItem('token');
+        }
+      }
+    })();
+
+    // Settings
+    async function loadSettings() {
+      const res = await api('/api/settings');
+      $('commissionPercent').value = res.settings && res.settings.commission_percent ? res.settings.commission_percent : '';
+    }
+    $('saveSettings').addEventListener('click', async ()=>{
+      const p = $('commissionPercent').value;
+      await api('/api/settings', { method: 'POST', body: JSON.stringify({ commission_percent: p }) });
+      alert('Saved');
+      loadSummary();
+    });
+
+    // Commission summary
+    async function loadSummary() {
+      const res = await api('/api/commission-summary');
+      $('summaryArea').innerHTML = `
+        <div>Commission %: ${res.percent}</div>
+        <div>Total deposits (approved): ${res.total_deposit}</div>
+        <div>Total withdraws (approved): ${res.total_withdraw}</div>
+        <div>Commission on deposits: ${res.commission_on_deposits}</div>
+        <div>Updated: ${res.summary_date}</div>
+      `;
+    }
+    $('refreshSummary').addEventListener('click', loadSummary);
+
+    // Customers
+    async function loadCustomers() {
+      const res = await api('/api/customers');
+      const arr = res.customers || [];
+      const html = ['<table><tr><th>ID</th><th>ชื่อ</th><th>อีเมล</th><th>โทร</th><th>note</th><th>จัดการ</th></tr>'];
+      arr.forEach(c => {
+        html.push(`<tr data-id="${c.id}">
+          <td>${c.id}</td>
+          <td contenteditable="false" class="c_name">${c.name||''}</td>
+          <td contenteditable="false" class="c_email">${c.email||''}</td>
+          <td contenteditable="false" class="c_phone">${c.phone||''}</td>
+          <td contenteditable="false" class="c_note">${c.note||''}</td>
+          <td>
+            <button class="btn edit">Edit</button>
+            <button class="btn save hidden">Save</button>
+            <button class="btn delete">Del</button>
+          </td>
+        </tr>`);
+      });
+      html.push('</table>');
+      $('customersArea').innerHTML = html.join('');
+      // fill tx_customer select
+      const sel = $('tx_customer');
+      sel.innerHTML = '<option value="">--select customer--</option>';
+      arr.forEach(c=>{
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.text = `${c.id} - ${c.name||c.email}`;
+        sel.appendChild(opt);
+      });
+
+      // attach events
+      document.querySelectorAll('#customersArea .edit').forEach(btn=>{
+        btn.addEventListener('click', (e)=>{
+          const tr = e.target.closest('tr');
+          tr.querySelectorAll('td[cool]').length; // noop
+          tr.querySelectorAll('td').forEach(td=>{
+            if (td.classList.contains('c_name') || td.classList.contains('c_email') || td.classList.contains('c_phone') || td.classList.contains('c_note')) {
+              td.contentEditable = "true";
+              td.style.background = "#fff8b0";
+            }
+          });
+          tr.querySelector('.edit').classList.add('hidden');
+          tr.querySelector('.save').classList.remove('hidden');
+        });
+      });
+      document.querySelectorAll('#customersArea .save').forEach(btn=>{
+        btn.addEventListener('click', async (e)=>{
+          const tr = e.target.closest('tr');
+          const id = tr.getAttribute('data-id');
+          const name = tr.querySelector('.c_name').innerText.trim();
+          const email = tr.querySelector('.c_email').innerText.trim();
+          const phone = tr.querySelector('.c_phone').innerText.trim();
+          const note = tr.querySelector('.c_note').innerText.trim();
+          await api('/api/customers/' + id, { method: 'PUT', body: JSON.stringify({ name, email, phone, note }) });
+          tr.querySelectorAll('td').forEach(td=>{
+            td.contentEditable = "false";
+            td.style.background = "";
+          });
+          tr.querySelector('.edit').classList.remove('hidden');
+          tr.querySelector('.save').classList.add('hidden');
+          loadCustomers();
+        });
+      });
+      document.querySelectorAll('#customersArea .delete').forEach(btn=>{
+        btn.addEventListener('click', async (e)=>{
+          if (!confirm('Delete this customer?')) return;
+          const tr = e.target.closest('tr');
+          const id = tr.getAttribute('data-id');
+          await api('/api/customers/' + id, { method: 'DELETE' });
+          loadCustomers();
+        });
+      });
+    }
+
+    $('addCustomer').addEventListener('click', async ()=>{
+      const name = $('c_name').value;
+      const email = $('c_email').value;
+      const phone = $('c_phone').value;
+      const note = $('c_note').value;
+      await api('/api/customers', { method: 'POST', body: JSON.stringify({ name, email, phone, note }) });
+      $('c_name').value=''; $('c_email').value=''; $('c_phone').value=''; $('c_note').value='';
+      await loadCustomers();
+    });
+
+    // Transactions
+    async function loadTransactions() {
+      const res = await api('/api/transactions');
+      const arr = res.transactions || [];
+      const html=['<table><tr><th>ID</th><th>Customer</th><th>Type</th><th>Amount</th><th>Status</th><th>Date</th><th>Action</th></tr>'];
+      arr.forEach(t=>{
+        html.push(`<tr data-id="${t.id}">
+          <td>${t.id}</td>
+          <td>${t.customer_name || t.customer_email || t.customer_id}</td>
+          <td>${t.type}</td>
+          <td>${t.amount}</td>
+          <td class="tx_status">${t.status}</td>
+          <td>${t.created_at}</td>
+          <td>
+            <button class="btn approve">Approve</button>
+            <button class="btn reject">Reject</button>
+            <button class="btn delTx">Del</button>
+          </td>
+        </tr>`);
+      });
+      html.push('</table>');
+      $('txArea').innerHTML = html.join('');
+
+      document.querySelectorAll('#txArea .approve').forEach(b=>{
+        b.addEventListener('click', async (e)=>{
+          const id = e.target.closest('tr').getAttribute('data-id');
+          await api('/api/transactions/' + id, { method: 'PUT', body: JSON.stringify({ status: 'approved' })});
+          loadTransactions(); loadSummary();
+        });
+      });
+      document.querySelectorAll('#txArea .reject').forEach(b=>{
+        b.addEventListener('click', async (e)=>{
+          const id = e.target.closest('tr').getAttribute('data-id');
+          await api('/api/transactions/' + id, { method: 'PUT', body: JSON.stringify({ status: 'rejected' })});
+          loadTransactions();
+        });
+      });
+      document.querySelectorAll('#txArea .delTx').forEach(b=>{
+        b.addEventListener('click', async (e)=>{
+          if (!confirm('Delete transaction?')) return;
+          const id = e.target.closest('tr').getAttribute('data-id');
+          await api('/api/transactions/' + id, { method: 'DELETE' });
+          loadTransactions(); loadSummary();
+        });
+      });
+    }
+
+    $('addTx').addEventListener('click', async ()=>{
+      const customer_id = $('tx_customer').value;
+      const type = $('tx_type').value;
+      const amount = parseFloat($('tx_amount').value || 0);
+      const status = $('tx_status').value;
+      if (!customer_id || !amount) { alert('เลือกลูกค้าและจำนวน'); return; }
+      await api('/api/transactions', { method: 'POST', body: JSON.stringify({ customer_id, type, amount, status }) });
+      $('tx_amount').value = '';
+      loadTransactions(); loadSummary();
+    });
+
+  </script>
+</body>
+</html>
